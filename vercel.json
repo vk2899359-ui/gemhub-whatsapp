@@ -1,6 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["bom1"],
   "functions": {
     "api/**/*.js": {
       "maxDuration": 60,
@@ -10,7 +9,7 @@
   "crons": [
     {
       "path": "/api/cron/abandoned-cart",
-      "schedule": "*/30 * * * *"
+      "schedule": "0 5 * * *"
     }
   ]
 }

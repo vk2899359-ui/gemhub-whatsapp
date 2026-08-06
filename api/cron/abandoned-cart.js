@@ -1,8 +1,14 @@
-// Vercel Cron (every 30 min): find tracked checkouts that are overdue for a
-// nudge and haven't converted, and send the abandoned-cart templates.
-//   - First nudge:  60 min after checkout, no order.
-//   - Second nudge: 24 h after checkout, still no order.
+// Vercel Cron: find tracked checkouts that are overdue for a nudge and
+// haven't converted, and send the abandoned-cart templates.
+//   - First nudge:  once the checkout is >= 60 min old with no order.
+//   - Second nudge: once the checkout is >= 24 h old, still no order.
 //   - Max 2 follow-ups per checkout. State tracked in Redis (7-day TTL).
+//
+// NOTE: On the Vercel Hobby plan crons run at most once per day, so this is
+// scheduled daily (see vercel.json). The due-time logic below is
+// frequency-independent — each run sends whatever nudges have come due since
+// the last run. On a Pro plan you can tighten the schedule (e.g. */30 * * * *)
+// for near-real-time nudges with no code change.
 import { secrets } from '../../lib/env.js';
 import {
   activeCheckoutIds,

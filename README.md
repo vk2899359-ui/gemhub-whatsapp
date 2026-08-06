@@ -128,9 +128,11 @@ It registers: `checkouts/create`, `checkouts/update`, `orders/create`,
 
 ### 3.6 Cron
 
-`vercel.json` already schedules `/api/cron/abandoned-cart` every 30 minutes
-(`*/30 * * * *`). Vercel picks it up automatically on deploy. It authenticates
-with `CRON_SECRET`.
+`vercel.json` schedules `/api/cron/abandoned-cart`. On the **Hobby plan** crons
+run at most **once per day**, so it's set to `0 5 * * *` (05:00 UTC ≈ 10:30 IST).
+Vercel picks it up automatically on deploy; it authenticates with `CRON_SECRET`.
+The nudge logic is frequency-independent — on **Pro** you can change the schedule
+to `*/30 * * * *` for near-real-time nudges with no code change.
 
 ---
 
