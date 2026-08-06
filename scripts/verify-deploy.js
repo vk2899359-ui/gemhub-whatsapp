@@ -60,15 +60,38 @@ async function checkRedis() {
 }
 
 async function checkShopify() {
-  const token = need('SHOPIFY_TOKEN');
+  // Dev Dashboard app: mint a token via client_credentials, then use it.
+  const clientId = env.SHOPIFY_API_KEY || env.SHOPIFY_CLIENT_ID;
+  const clientSecret = need('SHOPIFY_API_SECRET');
+  if (!clientId) throw new Error('missing env var SHOPIFY_API_KEY');
+
+  const tokenRes = await fetch(
+    `https://${SHOPIFY_STORE}/admin/oauth/access_token`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: clientId,
+        client_secret: clientSecret,
+      }).toString(),
+    }
+  );
+  const tokenBody = await tokenRes.text();
+  if (!tokenRes.ok) {
+    throw new Error(`token exchange HTTP ${tokenRes.status}: ${tokenBody.slice(0, 300)}`);
+  }
+  const token = JSON.parse(tokenBody).access_token;
+  if (!token) throw new Error(`no access_token in response: ${tokenBody.slice(0, 200)}`);
+
   const res = await fetch(
     `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/shop.json`,
     { headers: { 'X-Shopify-Access-Token': token } }
   );
   const body = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
+  if (!res.ok) throw new Error(`shop.json HTTP ${res.status}: ${body.slice(0, 300)}`);
   const shop = JSON.parse(body).shop;
-  return `shop "${shop.name}" (${shop.myshopify_domain}), plan ${shop.plan_name}`;
+  return `shop "${shop.name}" (${shop.myshopify_domain}), plan ${shop.plan_name}, token minted OK`;
 }
 
 async function checkMeta() {

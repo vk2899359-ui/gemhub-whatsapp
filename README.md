@@ -54,10 +54,14 @@ Upstash Redis for state and Claude for AI replies.
 - An **Upstash Redis** database (REST enabled).
 - A **Meta / WhatsApp Cloud API** app with a phone number
   (WABA `1747154966614614`, phone-number id `1186838137853897`).
-- A **Shopify custom app** on `vbvidr-u9.myshopify.com` with an Admin API
-  access token and these scopes:
-  `read_products`, `read_checkouts`, `read_orders`, `write_orders`,
-  `read_fulfillments`.
+- A **Shopify Dev Dashboard app** on `vbvidr-u9.myshopify.com` (same Shopify
+  org as the store) with these scopes:
+  `read_products`, `read_checkouts`, `read_customers`, `write_orders`,
+  `read_fulfillments`, `read_inventory`. The Admin API token is minted at
+  runtime via the OAuth **client_credentials** grant (24h token, auto-refreshed
+  and cached in Redis) — set `SHOPIFY_API_KEY` (Client ID) and
+  `SHOPIFY_API_SECRET` (Client secret, `shpss_…`). No static `shpat_` token
+  needed; legacy static tokens still work if `SHOPIFY_TOKEN` is set.
 - An **Anthropic API key**.
 
 ---
@@ -79,7 +83,7 @@ Add every variable from [`.env.example`](.env.example) in the Vercel project
 
 - `PUBLIC_BASE_URL` — set this **after** the first deploy to your production
   URL (e.g. `https://gemhub-whatsapp.vercel.app`), then redeploy.
-- `SHOPIFY_TOKEN`, `SHOPIFY_API_SECRET`
+- `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`
 - `META_TOKEN`, `VERIFY_TOKEN` (`gemhub2026`)
 - `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` (defaults to `claude-sonnet-4-6`)
 - `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`
