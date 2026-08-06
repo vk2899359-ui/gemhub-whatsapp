@@ -269,12 +269,43 @@ order tagged `cod-cancelled` and cancelled in Shopify.
 **Tracking.** `orders/paid` → `order_paid`. `fulfillments/create` →
 `order_shipped` with tracking number + URL.
 
-**AI chat.** Any inbound text that isn't a button goes to Claude
-(`ANTHROPIC_MODEL`, default `claude-sonnet-4-6`) with the last 10 turns of
-context (24-h TTL). Claude can call `lookup_product` to fetch live prices/stock
-from the Shopify Admin API and never invents data. It escalates to a human if
-the customer asks for a person, or after 3 unresolved intents; escalation sets a
-Redis flag and the bot then stays quiet so a human can take over.
+**AI chat — the sales consultant.** Any inbound text that isn't a COD button
+goes to Claude (`ANTHROPIC_MODEL`, default `claude-sonnet-4-6`) with the last 10
+turns of context (24-h TTL). The system prompt (`lib/claude.js`) is a
+world-class fine-jewellery sales consultant: it matches the customer's language
+(Hindi / Hinglish / English), qualifies early (occasion, budget, recipient,
+timeline), recommends 2–3 curated pieces with a reason each, anchors on value
+(IGI/GRA certification, direct-factory pricing, CAD design, old-gold exchange,
+free insured shipping), handles objections, and always ends with a next step.
+It calls `lookup_products` for live data and never invents prices or stock.
+
+**Interactive replies.** Instead of plain text, Claude composes each reply by
+choosing a WhatsApp format via tools, rendered in `lib/handlers/inbound.js`:
+
+- **Default menu** (buttons): Browse Jewellery · Book Showroom Visit · Custom Design
+- **After showing products** (buttons): See More · Book a Visit · Talk to Expert
+- **Product cards**: up to 4 real Shopify **image messages** with catalogue
+  captions (name, price, IGI/GRA cert, metal) + a *View Product* link, then a
+  pick-list. Uses native catalog `product`/`product_list` messages when the WABA
+  has a connected catalogue and `WHATSAPP_USE_CATALOG=true`; otherwise images.
+- **Location intent**: a location pin + a *Get Directions* CTA to Google Maps.
+- **Booking intent**: a **list** of showroom time slots (10 AM–7 PM); tapping a
+  slot confirms the visit and shares the location.
+- **Escalation**: a warm handoff with the showroom number (WhatsApp free-form
+  can't render a `tel:` button, so the number is surfaced as tap-to-call text).
+
+Button and list replies are handled **by their reply id** in the webhook
+(`browse_jewellery`, `book_visit`, `slot:<time>`, `product:<id>`, …), never by
+matching the tapped text.
+
+**Ad-sourced conversations.** If the first message matches the Google Ads
+starter ("Hi GemHub! I'm interested in your lab-grown diamond jewellery…"), the
+conversation is tagged `adsrc:<phone>` in Redis and the consultant opens with a
+qualifying question instead of a generic greeting.
+
+**Escalation** to a human happens if the customer asks for a person, for
+bulk/corporate/complaint intents, or after 3 unresolved intents; it sets a Redis
+flag and the bot then stays quiet so a human can take over.
 
 **Reliability.** Every send/receive is logged to the Redis list `log:events`
 (capped at 2000). Sends retry up to 3× with exponential backoff. Incoming
