@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 60,
+      "memory": 256
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/abandoned-cart",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}

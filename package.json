@@ -1,0 +1,18 @@
+{
+  "name": "gemhub-whatsapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WhatsApp automation for the GemHub Shopify jewellery store (abandoned cart, COD confirmation, order tracking, AI chat).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@upstash/redis": "1.34.3",
+    "@vercel/functions": "1.5.0"
+  }
+}
