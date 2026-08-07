@@ -248,6 +248,30 @@ Free insured delivery, right to your door 💎
 
 ---
 
+### 4.6 `gemhub_lead_handover` — Utility
+
+Sent to the sales agent (Keshav) when a customer is handed over, **only if
+his 24h WhatsApp window is closed** (no message from him in the last 24h).
+If his window is open, the bot sends a richer free-form message instead
+(full transcript, products shown, budget) — no template needed for that case.
+
+**Body:**
+```
+🔔 New GemHub lead
+
+Customer: {{1}}
+WhatsApp: {{2}}
+Interested in: {{3}}
+Reason: {{4}}
+
+Reply here to claim this chat — the bot will pause for this customer.
+```
+**Variables:** `{{1}}` customer name · `{{2}}` customer WhatsApp number · `{{3}}` short interest/topic · `{{4}}` handover reason
+**Sample values:** `{{1}}=Priya Sharma` · `{{2}}=919876543210` · `{{3}}=Solitaire engagement ring` · `{{4}}=Asked to speak with a person`
+**Buttons:** none (the agent replies or swipe-replies directly — see §6 below).
+
+---
+
 ## 5. How it behaves
 
 **24-hour service window.** Inbound messages open the window (tracked in Redis).
@@ -291,8 +315,8 @@ choosing a WhatsApp format via tools, rendered in `lib/handlers/inbound.js`:
 - **Location intent**: a location pin + a *Get Directions* CTA to Google Maps.
 - **Booking intent**: a **list** of showroom time slots (10 AM–7 PM); tapping a
   slot confirms the visit and shares the location.
-- **Escalation**: a warm handoff with the showroom number (WhatsApp free-form
-  can't render a `tel:` button, so the number is surfaced as tap-to-call text).
+- **Handover**: a warm, language-matched handoff to the sales agent (Keshav) —
+  see §5a below.
 
 Button and list replies are handled **by their reply id** in the webhook
 (`browse_jewellery`, `book_visit`, `slot:<time>`, `product:<id>`, …), never by
@@ -303,9 +327,49 @@ starter ("Hi GemHub! I'm interested in your lab-grown diamond jewellery…"), th
 conversation is tagged `adsrc:<phone>` in Redis and the consultant opens with a
 qualifying question instead of a generic greeting.
 
-**Escalation** to a human happens if the customer asks for a person, for
-bulk/corporate/complaint intents, or after 3 unresolved intents; it sets a Redis
-flag and the bot then stays quiet so a human can take over.
+### 5a. Human handover (`lib/handover.js`)
+
+Handover to the sales agent — **Keshav, +91 85957 72402** (`SALES_AGENT_NAME` /
+`SALES_AGENT_PHONE`) — triggers on any of:
+
+1. Customer explicitly asks for a person ("talk to a human", "kisi se baat
+   karao", …) — `HUMAN_REQUEST_RE`.
+2. Customer asks for a number to call ("share your number", "number do", …) —
+   `NUMBER_REQUEST_RE`.
+3. The bot fails to resolve intent **3 times in a row** — existing
+   `bumpIntentFailures` counter.
+4. Something the bot genuinely can't do — bulk/wholesale order, complaint,
+   payment issue/fraud (`BUSINESS_ESCALATION_RE` safety net), or a
+   custom-quote-beyond-catalogue request the AI itself judges out of scope via
+   its `unable_to_help` tool.
+
+**On every trigger, all three things happen:**
+
+1. **Customer message**, in their detected language (Hindi / Hinglish /
+   English — a fast heuristic, not an AI call, so the handoff is instant):
+   tells them Keshav will help and shares his number to call directly.
+2. **Agent notification** to Keshav: free-form (rich — full recent transcript,
+   products shown, budget mention if detected, reason) if his 24h window is
+   open; the `gemhub_lead_handover` **template** (§4.6) otherwise.
+3. **Redis handover flag** (`escalation:<phone>`, reusing the existing
+   "is a human handling this" key) — the bot goes quiet for that customer.
+   **TTL is a sliding 24h window**: every customer message received while
+   handed over refreshes it, so it **auto-releases after 24h of no customer
+   activity**. It's also tracked in a `handover:active` Redis set for
+   "release all".
+
+**Releasing a chat back to the bot** — Keshav has three ways, all handled by
+`handleAgentInbound` (messages *from* his number never reach the AI/customer
+flow):
+- **Swipe-reply** to the lead notification — WhatsApp echoes the original
+  message id (`context.id`), which is mapped back to the customer
+  (`handover:msg:<wamid>`, 24h TTL). Most precise; works even with several
+  leads open.
+- **`release <number>`** — releases that specific customer.
+- **`release all`** — releases every currently active handover.
+- A bare **`done` / `resolved` / `ok`** releases the one active handover if
+  there's exactly one; with several open it lists them and asks him to be
+  specific.
 
 **Reliability.** Every send/receive is logged to the Redis list `log:events`
 (capped at 2000). Sends retry up to 3× with exponential backoff. Incoming
@@ -330,7 +394,13 @@ it; Shopify webhooks return `401` on bad HMAC and `200` otherwise.
 6. **Abandoned cart:** create a checkout with a phone number, don't order, wait
    for the cron (or hit `/api/cron/abandoned-cart` with the `CRON_SECRET`
    bearer header) after 60 min.
-7. **Logs:** inspect `log:events` in Upstash for a full audit trail.
+7. **Human handover:** from a *different* WhatsApp number than Keshav's,
+   message the bot "I want to talk to a person" (or in Hindi/Hinglish) →
+   confirm you get a language-matched reply with Keshav's number, and that
+   Keshav receives a lead notification. Reply-to (swipe) that notification
+   from Keshav's number → confirm you receive "✅ Released …" and the bot
+   responds again on your next message.
+8. **Logs:** inspect `log:events` in Upstash for a full audit trail.
 
 ---
 
