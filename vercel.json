@@ -11,5 +11,8 @@
       "path": "/api/cron/abandoned-cart",
       "schedule": "0 5 * * *"
     }
+  ],
+  "rewrites": [
+    { "source": "/dashboard", "destination": "/api/dashboard" }
   ]
 }

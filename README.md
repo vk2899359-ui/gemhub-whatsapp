@@ -9,9 +9,13 @@ Upstash Redis for state and Claude for AI replies.
 - Abandoned-cart recovery (60 min + 24 h nudges, max 2 per checkout)
 - COD order confirmation with CONFIRM / CANCEL buttons → tags & cancels in Shopify
 - Order-paid confirmation & shipped-with-tracking messages
-- AI sales assistant (Hindi / Hinglish / English) with live product lookup
+- AI sales consultant (Hindi / Hinglish / English) with live product lookup,
+  interactive menus/product cards/booking, and human handover
+- Human handover to the sales agent (Keshav) with lead-summary notifications
+- A WhatsApp-Web-style CRM dashboard (`/dashboard`) — every conversation,
+  manual replies, bot on/off, search/filter, lead stage tracking
 - 24-hour service window handling, retries with backoff, webhook de-dup,
-  full send/receive logging in Redis, human escalation
+  full send/receive logging in Redis
 
 ---
 
@@ -23,25 +27,38 @@ Upstash Redis for state and Claude for AI replies.
 │   ├── webhook.js                 # WhatsApp: GET verify + POST receive
 │   ├── shopify-webhook.js         # Shopify: HMAC-verified event receiver
 │   ├── register-webhooks.js       # One-time Shopify webhook registration
-│   └── cron/
-│       └── abandoned-cart.js      # Vercel cron, every 30 min
+│   ├── cron/
+│   │   └── abandoned-cart.js      # Vercel cron, daily
+│   └── dashboard/
+│       ├── index.js               # Dashboard page (self-contained HTML/CSS/JS)
+│       ├── login.js / logout.js   # Password auth (signed cookie)
+│       ├── conversations.js       # GET list + search + filter
+│       ├── thread.js              # GET one conversation's full thread
+│       ├── send.js                # POST manual reply (auto-pauses bot)
+│       └── bot.js                 # POST bot on/off toggle
 ├── lib/
 │   ├── env.js                     # Config + lazy secrets
 │   ├── redis.js                   # Upstash client
 │   ├── http.js                    # Raw body + fetch-with-backoff
-│   ├── log.js                     # Redis event log
+│   ├── log.js                     # Flat Redis debug log (log:events)
+│   ├── conversations.js           # CRM data layer — per-conversation threads
+│   ├── dashboardAuth.js           # Dashboard password/session handling
 │   ├── phone.js                   # Phone normalisation
-│   ├── state.js                   # Window, memory, dedup, escalation
+│   ├── lang.js                    # Zero-latency language detection
+│   ├── leadinfo.js                # Budget/occasion/objection heuristics
+│   ├── state.js                   # Window, memory, dedup, handover flag
 │   ├── stores.js                  # Checkout tracking + COD mapping
-│   ├── whatsapp.js                # Cloud API send (text/template)
+│   ├── whatsapp.js                # Cloud API send + inbound/outbound recording
 │   ├── templates.js               # Template component builders
 │   ├── shopify.js                 # Admin API + HMAC + registration
-│   ├── claude.js                  # AI assistant (tool-use loop)
+│   ├── shopify-token.js           # client_credentials token mint/cache
+│   ├── claude.js                  # AI sales consultant (tool-use loop)
+│   ├── handover.js                # Human handover to the sales agent
 │   └── handlers/
 │       ├── inbound.js             # Inbound message routing
 │       └── shopify-events.js      # Shopify topic → WhatsApp flow
 ├── package.json
-├── vercel.json                    # Cron config + function settings
+├── vercel.json                    # Cron + /dashboard rewrite + function settings
 ├── .env.example
 └── README.md
 ```
@@ -90,6 +107,7 @@ Add every variable from [`.env.example`](.env.example) in the Vercel project
 - `REGISTER_SECRET` — pick any strong random string
 - `CRON_SECRET` — pick any strong random string (Vercel sends this to the cron
   endpoint automatically)
+- `DASHBOARD_PASSWORD` — pick a strong, unique password for `/dashboard`
 
 > Locally: `cp .env.example .env`, fill it in, and run `vercel dev`.
 
@@ -268,7 +286,7 @@ Reply here to claim this chat — the bot will pause for this customer.
 ```
 **Variables:** `{{1}}` customer name · `{{2}}` customer WhatsApp number · `{{3}}` short interest/topic · `{{4}}` handover reason
 **Sample values:** `{{1}}=Priya Sharma` · `{{2}}=919876543210` · `{{3}}=Solitaire engagement ring` · `{{4}}=Asked to speak with a person`
-**Buttons:** none (the agent replies or swipe-replies directly — see §6 below).
+**Buttons:** none (the agent replies or swipe-replies directly — see §5a below).
 
 ---
 
@@ -371,6 +389,75 @@ flow):
   there's exactly one; with several open it lists them and asks him to be
   specific.
 
+### 5b. CRM dashboard (`/dashboard`)
+
+A WhatsApp-Web-style dashboard for every conversation, served as a single
+self-contained page (no build step) at **`/dashboard`** (aliases to
+`/api/dashboard`). Password-gated via `DASHBOARD_PASSWORD` — a signed,
+HttpOnly session cookie, no user accounts, with a Redis-backed rate limit on
+login attempts (10 / 15 min per IP).
+
+**Data model (`lib/conversations.js`).** The flat `log:events` debug log
+(§ above) isn't structured enough to reconstruct a conversation, so every
+message now ALSO gets written into a per-conversation record:
+- `thread:<phone>` — a capped (300 messages, 90-day TTL) list, oldest → newest,
+  with a stable shape per entry: direction, kind (text/image/buttons/list/
+  button_reply/location/template/order_event/…), body, media URL + caption,
+  buttons/sections, which button/row was tapped, timestamp.
+- `conversations` — a sorted set (score = last activity) for instant
+  most-recent-first listing without a full scan.
+- `conv:meta:<phone>` — name, last-message preview, unread count, lead stage,
+  detected budget/occasion, objection flag, has-order flag.
+- **Bot on/off and ad-sourced are NOT duplicated here** — read live from the
+  existing `escalation:<phone>` / `adsrc:<phone>` keys (§5a), so there's a
+  single source of truth and the dashboard toggle IS the same mechanism as
+  agent handover (flipping it off pauses the bot exactly like Keshav taking
+  over; flipping it on releases it exactly like his release command).
+
+**Recording is automatic, not scattered.** `lib/whatsapp.js`'s `callGraph` —
+the one function every single send already goes through (AI replies, COD
+templates, abandoned-cart nudges, dashboard manual replies, everything) —
+records each successful send into the thread. Inbound messages are recorded
+once at the top of `handleInboundMessage`. Nothing needed touching at each
+individual call site, and nothing sent via any current or future flow can be
+missed.
+
+**Lead stage** (`greeted → qualified → shown_products → booked → purchased`)
+is a monotonically-advancing heuristic, not a strict state machine: budget/
+occasion mentions in inbound text advance to `qualified`, showing product
+cards advances to `shown_products`, booking a slot advances to `booked`,
+`orders/paid` advances to `purchased`. It never regresses. Objection language
+("too expensive", "mehenga") sets a separate `hasObjection` flag rather than
+changing stage. All heuristic — a hint for the dashboard, not a data-entry
+replacement.
+
+**Search & filters.** Typing a query first matches conversation name / phone /
+last-message preview (cheap, bounded to the most recent 500 conversations —
+this business's realistic scale). If that finds nothing, it falls back to
+scanning full thread bodies — a deeper, user-initiated-only pass (never part
+of the polling loop, so it doesn't burn Redis requests in the background).
+Filter chips: **Unread**, **Handed over**, **Ad-sourced**, **Has order**.
+
+**Manual replies auto-pause the bot** — sending from the dashboard sets the
+same handover flag as §5a (reason `dashboard_reply`), so the bot goes quiet
+for that customer until the **Bot ON/OFF** toggle is flipped back or the
+sliding 24h auto-release kicks in. If the customer's 24h window is closed,
+free-form send fails and the error surfaces in the reply box (no template
+picker in this version — use WhatsApp Manager directly for that case).
+
+**Live-ish updates via polling** (no WebSockets): the conversation list polls
+every 8s, the open thread every 4s, both paused while the browser tab is
+hidden (Page Visibility API) to avoid burning Upstash requests in the
+background.
+
+**Known limitation:** inbound media (photos, voice notes, etc. sent *by* the
+customer) renders as a labelled placeholder bubble, not the actual image —
+Meta's inbound media URLs are token-gated and expire quickly, which would need
+a proxy endpoint to serve safely. Out of scope for this pass since customers
+in this flow are not expected to send photos. Outbound product-card images
+(the bot showing Shopify photos) are completely unaffected — those are public
+CDN URLs and render normally.
+
 **Reliability.** Every send/receive is logged to the Redis list `log:events`
 (capped at 2000). Sends retry up to 3× with exponential backoff. Incoming
 WhatsApp webhooks are de-duplicated by message id (`SET NX`). The WhatsApp
@@ -400,7 +487,14 @@ it; Shopify webhooks return `401` on bad HMAC and `200` otherwise.
    Keshav receives a lead notification. Reply-to (swipe) that notification
    from Keshav's number → confirm you receive "✅ Released …" and the bot
    responds again on your next message.
-8. **Logs:** inspect `log:events` in Upstash for a full audit trail.
+8. **Dashboard:** open `/dashboard`, log in with `DASHBOARD_PASSWORD` → confirm
+   the conversation from step 4 appears with a correct preview/timestamp →
+   open it → confirm the full bubble thread renders (including any product
+   cards/buttons) → flip **Bot OFF**, confirm `escalation:<phone>` appears in
+   Redis and the bot stops replying on WhatsApp → send a manual reply from the
+   dashboard → confirm it arrives on WhatsApp → flip **Bot ON** → confirm the
+   bot resumes replying. Try the search box and each filter chip.
+9. **Logs:** inspect `log:events` in Upstash for a full audit trail.
 
 ---
 
