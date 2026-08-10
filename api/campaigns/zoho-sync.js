@@ -10,16 +10,22 @@ import { upsertLeadsBatch, createLeadList, incrementListCount } from '../../lib/
 import { redis } from '../../lib/redis.js';
 import { logSystem } from '../../lib/log.js';
 
-const STATE_KEY = 'zoho:sync:state'; // hash: { listId, pageToken, status, imported, startedAt }
+const STATE_KEY = 'zoho:sync:state'; // hash: { listId, runId, pageToken, status, imported, startedAt }
 // Vercel's hard function limit is 60s (vercel.json maxDuration). waitUntil()
 // extends the invocation to let a background self-chain fetch complete, but
 // does NOT bypass that hard cap — if the main work loop itself already ate
 // most of the 60s, there's no time left for the chain to fire before the
 // whole invocation is killed. Found live: a 45s budget meant real tick
 // processing took ~47.5s wall-clock, leaving ~12s of an already-tight 60s
-// window — self-chaining silently stopped after the first tick. 20s leaves
-// a real ~40s/67% buffer.
+// window. 20s leaves a real ~40s/67% buffer.
 const TICK_BUDGET_MS = 20000;
+
+function newRunId() {
+  // 'r' prefix guarantees this can never be all-digits — Upstash
+  // deserializes purely-numeric-looking strings back into JS numbers on
+  // read, which would break the strict === fencing-token comparison below.
+  return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -49,10 +55,22 @@ export default async function handler(req, res) {
 
   if (isStart || !state?.listId) {
     const listId = 'zoho_' + Date.now();
+    const runId = newRunId();
     await createLeadList({ id: listId, name: `Zoho sync ${new Date().toISOString().slice(0, 10)}`, sourceType: 'zoho' });
-    state = { listId, pageToken: '', status: 'running', imported: '0', startedAt: String(Date.now()) };
+    state = { listId, runId, pageToken: '', status: 'running', imported: '0', startedAt: String(Date.now()) };
     await redis().hset(STATE_KEY, state);
+    await logSystem({ event: 'zoho_sync_started', listId, runId });
   }
+
+  // Fencing token: this invocation only acts on behalf of the run it read
+  // above. If a newer 'start' supersedes it mid-flight (e.g. a manual
+  // re-trigger while an earlier self-chain lineage is still alive), THIS
+  // invocation's writes/self-chain are abandoned rather than clobbering the
+  // newer run's progress. Found live: two overlapping sync lineages writing
+  // to the same un-scoped state key produced wildly inconsistent counters
+  // (imported count went backwards between UI refreshes).
+  const myRunId = state.runId;
+  const myListId = state.listId;
 
   const deadline = Date.now() + TICK_BUDGET_MS;
   let imported = Number(state.imported || 0);
@@ -69,39 +87,46 @@ export default async function handler(req, res) {
       // budget AND Vercel's function timeout mid-page (found live: a real
       // sync stalled at 58/187 leads with zero error logged, because a
       // hard timeout kill doesn't reach a catch block).
-      const { imported: batchImported } = await upsertLeadsBatch(page.leads, state.listId);
+      const { imported: batchImported } = await upsertLeadsBatch(page.leads, myListId);
       imported += batchImported;
       pageToken = page.nextPageToken;
       hasMore = page.hasMore && Boolean(pageToken);
     }
   } catch (err) {
-    await redis().hset(STATE_KEY, { status: 'error', lastError: err.message });
-    await logSystem({ event: 'zoho_sync_error', error: err.message });
+    const current = await redis().hget(STATE_KEY, 'runId');
+    if (current === myRunId) {
+      await redis().hset(STATE_KEY, { status: 'error', lastError: err.message });
+    }
+    await logSystem({ event: 'zoho_sync_error', listId: myListId, runId: myRunId, error: err.message });
     return res.status(502).json({ ok: false, error: err.message, importedSoFar: imported });
   }
 
-  await incrementListCount(state.listId, imported - Number(state.imported || 0));
+  // Check the fencing token BEFORE writing anything back.
+  const currentRunId = await redis().hget(STATE_KEY, 'runId');
+  if (currentRunId !== myRunId) {
+    await logSystem({ event: 'zoho_sync_superseded', listId: myListId, runId: myRunId, currentRunId });
+    return res.status(200).json({ ok: true, superseded: true, listId: myListId });
+  }
+
+  await incrementListCount(myListId, imported - Number(state.imported || 0));
   await redis().hset(STATE_KEY, {
     pageToken: pageToken || '',
     imported: String(imported),
     status: hasMore ? 'running' : 'done',
   });
 
-  await logSystem({ event: 'zoho_sync_tick', listId: state.listId, pagesThisTick, imported, hasMore });
+  await logSystem({ event: 'zoho_sync_tick', listId: myListId, runId: myRunId, pagesThisTick, imported, hasMore });
 
   if (hasMore) {
     waitUntil(selfChain());
   }
 
-  return res.status(200).json({ ok: true, listId: state.listId, imported, hasMore, pagesThisTick });
+  return res.status(200).json({ ok: true, listId: myListId, imported, hasMore, pagesThisTick });
 }
 
 // Wrapped in waitUntil() at the call site above — a bare un-awaited fetch()
 // can be killed by Vercel the instant the response is sent, since nothing
-// tells the platform to keep this invocation alive for it. This was the
-// actual reason a live sync stopped self-chaining after its first tick
-// (imported count stopped moving, no error logged) — waitUntil is what
-// guarantees the background request completes.
+// tells the platform to keep this invocation alive for it.
 async function selfChain() {
   if (!CONFIG.PUBLIC_BASE_URL) return;
   try {
