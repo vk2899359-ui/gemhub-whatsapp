@@ -5,7 +5,7 @@
 // one-time Zoho "Self Client" setup.
 import { CONFIG, secrets, isZohoConfigured } from '../../lib/env.js';
 import { fetchLeadsPage } from '../../lib/zoho.js';
-import { upsertLead, createLeadList, incrementListCount } from '../../lib/leads.js';
+import { upsertLeadsBatch, createLeadList, incrementListCount } from '../../lib/leads.js';
 import { redis } from '../../lib/redis.js';
 import { logSystem } from '../../lib/log.js';
 
@@ -55,10 +55,14 @@ export default async function handler(req, res) {
     while (hasMore && Date.now() < deadline) {
       const page = await fetchLeadsPage(pageToken || null);
       pagesThisTick++;
-      for (const lead of page.leads) {
-        const phone = await upsertLead({ ...lead, listId: state.listId });
-        if (phone) imported++;
-      }
+      // Pipelined batch write, not one sequential round trip per lead —
+      // a plain per-lead loop here previously ran past both the tick
+      // budget AND Vercel's function timeout mid-page (found live: a real
+      // sync stalled at 58/187 leads with zero error logged, because a
+      // hard timeout kill doesn't reach a catch block). Confirmed fixed by
+      // re-running the same sync after this change.
+      const { imported: batchImported } = await upsertLeadsBatch(page.leads, state.listId);
+      imported += batchImported;
       pageToken = page.nextPageToken;
       hasMore = page.hasMore && Boolean(pageToken);
     }

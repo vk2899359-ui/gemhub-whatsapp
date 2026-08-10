@@ -3,7 +3,7 @@
 // call well under the function timeout for large imports) — this endpoint
 // just upserts one batch and is safe to call repeatedly for the same list.
 import { requireAuth } from '../../../lib/dashboardAuth.js';
-import { upsertLead, createLeadList, incrementListCount } from '../../../lib/leads.js';
+import { upsertLeadsBatch, createLeadList, incrementListCount } from '../../../lib/leads.js';
 import { logSystem } from '../../../lib/log.js';
 
 export default async function handler(req, res) {
@@ -25,21 +25,18 @@ export default async function handler(req, res) {
     await createLeadList({ id: listId, name: listName || listId, sourceType: 'csv' });
   }
 
-  let imported = 0;
-  const invalid = [];
-  for (const row of rows) {
-    const phone = await upsertLead({
-      phone: row.phone,
-      name: row.name,
-      source: row.source || 'csv_upload',
-      tags: row.tags,
-      lastActivityAt: row.lastActivityAt,
-      extra: row.extra,
-      listId,
-    });
-    if (phone) imported++;
-    else invalid.push(row.phone);
-  }
+  const leads = rows.map((row) => ({
+    phone: row.phone,
+    name: row.name,
+    source: row.source || 'csv_upload',
+    tags: row.tags,
+    lastActivityAt: row.lastActivityAt,
+    extra: row.extra,
+  }));
+  // Pipelined batch write — a per-row sequential loop here could exceed
+  // Vercel's function timeout on a large 2000-row batch (same bug found
+  // and fixed live in the Zoho sync tick; applies here too).
+  const { imported, invalid } = await upsertLeadsBatch(leads, listId);
   if (imported > 0) await incrementListCount(listId, imported);
 
   await logSystem({ event: 'lead_batch_uploaded', listId, imported, invalidCount: invalid.length });
