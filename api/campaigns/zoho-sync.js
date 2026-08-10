@@ -3,6 +3,7 @@
 // pull never risks Vercel's 60s function timeout. Inert until
 // ZOHO_CLIENT_ID/SECRET/REFRESH_TOKEN are configured — see README for the
 // one-time Zoho "Self Client" setup.
+import { waitUntil } from '@vercel/functions';
 import { CONFIG, secrets, isZohoConfigured } from '../../lib/env.js';
 import { fetchLeadsPage } from '../../lib/zoho.js';
 import { upsertLeadsBatch, createLeadList, incrementListCount } from '../../lib/leads.js';
@@ -59,8 +60,7 @@ export default async function handler(req, res) {
       // a plain per-lead loop here previously ran past both the tick
       // budget AND Vercel's function timeout mid-page (found live: a real
       // sync stalled at 58/187 leads with zero error logged, because a
-      // hard timeout kill doesn't reach a catch block). Confirmed fixed by
-      // re-running the same sync after this change.
+      // hard timeout kill doesn't reach a catch block).
       const { imported: batchImported } = await upsertLeadsBatch(page.leads, state.listId);
       imported += batchImported;
       pageToken = page.nextPageToken;
@@ -82,17 +82,27 @@ export default async function handler(req, res) {
   await logSystem({ event: 'zoho_sync_tick', listId: state.listId, pagesThisTick, imported, hasMore });
 
   if (hasMore) {
-    selfChain();
+    waitUntil(selfChain());
   }
 
   return res.status(200).json({ ok: true, listId: state.listId, imported, hasMore, pagesThisTick });
 }
 
-function selfChain() {
+// Wrapped in waitUntil() at the call site above — a bare un-awaited fetch()
+// can be killed by Vercel the instant the response is sent, since nothing
+// tells the platform to keep this invocation alive for it. This was the
+// actual reason a live sync stopped self-chaining after its first tick
+// (imported count stopped moving, no error logged) — waitUntil is what
+// guarantees the background request completes.
+async function selfChain() {
   if (!CONFIG.PUBLIC_BASE_URL) return;
-  fetch(`${CONFIG.PUBLIC_BASE_URL}/api/campaigns/zoho-sync`, {
-    method: 'POST',
-    headers: { 'x-campaign-secret': process.env.CAMPAIGN_SECRET || '', 'Content-Type': 'application/json' },
-    body: '{}',
-  }).catch((err) => console.error('[zoho-sync] self-chain failed', err.message));
+  try {
+    await fetch(`${CONFIG.PUBLIC_BASE_URL}/api/campaigns/zoho-sync`, {
+      method: 'POST',
+      headers: { 'x-campaign-secret': process.env.CAMPAIGN_SECRET || '', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+  } catch (err) {
+    console.error('[zoho-sync] self-chain failed', err.message);
+  }
 }
