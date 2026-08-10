@@ -11,7 +11,15 @@ import { redis } from '../../lib/redis.js';
 import { logSystem } from '../../lib/log.js';
 
 const STATE_KEY = 'zoho:sync:state'; // hash: { listId, pageToken, status, imported, startedAt }
-const TICK_BUDGET_MS = 45000;
+// Vercel's hard function limit is 60s (vercel.json maxDuration). waitUntil()
+// extends the invocation to let a background self-chain fetch complete, but
+// does NOT bypass that hard cap — if the main work loop itself already ate
+// most of the 60s, there's no time left for the chain to fire before the
+// whole invocation is killed. Found live: a 45s budget meant real tick
+// processing took ~47.5s wall-clock, leaving ~12s of an already-tight 60s
+// window — self-chaining silently stopped after the first tick. 20s leaves
+// a real ~40s/67% buffer.
+const TICK_BUDGET_MS = 20000;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
