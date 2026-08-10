@@ -82,6 +82,7 @@ async function processPayload(body) {
             status: s.status,
             messageId: s.id,
             recipient: s.recipient_id,
+            error: s.errors?.[0] ? `${s.errors[0].code}: ${s.errors[0].title || s.errors[0].message}` : undefined,
           });
           try {
             await applyCampaignStatus(s);
