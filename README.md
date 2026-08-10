@@ -28,14 +28,37 @@ Upstash Redis for state and Claude for AI replies.
 │   ├── shopify-webhook.js         # Shopify: HMAC-verified event receiver
 │   ├── register-webhooks.js       # One-time Shopify webhook registration
 │   ├── cron/
-│   │   └── abandoned-cart.js      # Vercel cron, daily
+│   │   └── abandoned-cart.js      # Vercel cron, daily (+ campaign watchdog sweep)
+│   ├── campaigns/
+│   │   ├── process.js             # Self-chaining campaign tick (secret-protected)
+│   │   └── zoho-sync.js           # Self-chaining Zoho Leads pull (secret-protected)
 │   └── dashboard/
-│       ├── index.js               # Dashboard page (self-contained HTML/CSS/JS)
+│       ├── index.js               # Conversations dashboard (self-contained HTML/CSS/JS)
+│       ├── campaigns-page.js      # Campaign builder page (self-contained HTML/CSS/JS)
 │       ├── login.js / logout.js   # Password auth (signed cookie)
 │       ├── conversations.js       # GET list + search + filter
 │       ├── thread.js              # GET one conversation's full thread
 │       ├── send.js                # POST manual reply (auto-pauses bot)
-│       └── bot.js                 # POST bot on/off toggle
+│       ├── bot.js                 # POST bot on/off toggle
+│       ├── leads/
+│       │   ├── upload.js          # Chunked CSV lead upload
+│       │   ├── meta.js            # Lead counts/sources/tags/lists for filters
+│       │   ├── zoho-start.js      # Trigger the Zoho sync
+│       │   └── zoho-status.js     # Poll Zoho sync progress
+│       ├── campaigns/
+│       │   ├── templates.js       # Live approved-template list (Meta API)
+│       │   ├── media-upload.js    # Header image upload -> reusable media_id
+│       │   ├── audience-preview.js# Resolve a filter to recipient count/sample
+│       │   ├── create.js          # Validate template + snapshot recipient queue
+│       │   ├── test-send.js       # Mandatory test send (>threshold campaigns)
+│       │   ├── approve.js         # Explicit approval -> running
+│       │   ├── launch.js          # Direct launch (<=threshold campaigns)
+│       │   ├── list.js / detail.js/failures.js # Monitor + failure breakdown
+│       │   ├── pause.js / resume.js            # Per-campaign control
+│       │   └── killswitch.js      # Global kill switch
+│       └── suppression/
+│           ├── list.js            # GET suppression list + count
+│           ├── add.js / remove.js # Manual suppression management
 ├── lib/
 │   ├── env.js                     # Config + lazy secrets
 │   ├── redis.js                   # Upstash client
@@ -54,11 +77,18 @@ Upstash Redis for state and Claude for AI replies.
 │   ├── shopify-token.js           # client_credentials token mint/cache
 │   ├── claude.js                  # AI sales consultant (tool-use loop)
 │   ├── handover.js                # Human handover to the sales agent
+│   ├── leads.js                   # Lead storage + audience resolution
+│   ├── campaigns.js               # Campaign CRUD, queue, guardrails
+│   ├── campaign-sender.js         # The resumable, self-chaining sending engine
+│   ├── optout.js                  # Opt-out detection + suppression
+│   ├── meta.js                    # Template list / media upload / quality rating
+│   ├── zoho.js                    # Zoho Leads API client
+│   ├── zoho-token.js              # Zoho OAuth refresh-token exchange
 │   └── handlers/
 │       ├── inbound.js             # Inbound message routing
 │       └── shopify-events.js      # Shopify topic → WhatsApp flow
 ├── package.json
-├── vercel.json                    # Cron + /dashboard rewrite + function settings
+├── vercel.json                    # Cron + /dashboard + /campaigns rewrites + settings
 ├── .env.example
 └── README.md
 ```
@@ -464,6 +494,120 @@ WhatsApp webhooks are de-duplicated by message id (`SET NX`). The WhatsApp
 webhook always returns `200` (even on internal errors) so Meta never disables
 it; Shopify webhooks return `401` on bad HMAC and `200` otherwise.
 
+### 5c. Bulk campaigns (`/campaigns`)
+
+A separate page (same auth, same visual language) for template-based bulk
+sends to a lead list — CSV upload or live Zoho CRM sync, template picker
+sourced live from Meta (never hardcoded), variable mapping with a live
+preview, audience filtering, scheduling, and a resumable sending engine with
+every guardrail from the spec built in and non-optional.
+
+**The reliability problem, and how it's solved on Hobby.** There is no
+always-on background worker on Vercel Hobby, and Hobby's own cron is capped
+at once/day (already true for the abandoned-cart cron). A multi-hour bulk
+send can't be driven by either of those alone, so the sender
+(`lib/campaign-sender.js`) uses **self-chaining**: each "tick"
+(`/api/campaigns/process`) processes a bounded chunk (~45s, safely under the
+60s function limit) at the campaign's configured throttle, then fires a
+fire-and-forget request at itself to continue. Layered on top:
+- The dashboard also nudges progress (via `list.js`'s side effects) while a
+  campaign is open.
+- The daily cron sweeps for a "running" campaign that's gone quiet
+  (`lastTickAt` stale >15 min) and re-kicks it — the backstop of last resort.
+- A manual **Resume** button in the dashboard always works, since the sender
+  is fully idempotent per recipient.
+
+**Honest limitation:** if a self-chain link ever fails to fire (rare, but
+possible) and nobody has the dashboard open, the daily-cron backstop means a
+worst case of **up to a 24h stall** before it's automatically noticed and
+restarted. For a campaign you want running unattended over many hours with
+tighter guarantees, point a free external cron pinger (e.g. cron-job.org) at
+`POST /api/campaigns/process` with header `x-campaign-secret: $CAMPAIGN_SECRET`
+every 1–2 minutes — zero code change needed, this endpoint is already
+designed to be safely called repeatedly and does nothing if there's no active
+campaign.
+
+**Resumability & dedup.** `campaign:<id>:queue` is an ordered, immutable list
+of recipients snapshotted once at campaign creation. `campaign:<id>:recipient:
+<phone>` is the single source of truth for whether that recipient has been
+handled — the sender always checks this before sending, so a recipient can
+never be double-messaged even if a tick is retried, a resume happens
+mid-flight, or the cursor is ever wrong. First-attempt sends and backoff
+retries run through two separate queues (primary + retry) so a handful of
+slow retries can never stall the primary queue's forward progress.
+
+**Guardrails, all enforced inside every tick, not just at launch:**
+- **Kill switch** — a persistent Redis flag. While on, every tick for every
+  campaign no-ops; turning it off resumes everything automatically on the
+  next tick, no per-campaign action needed.
+- **Quality rating** — checked (cached 5 min) before every batch. `YELLOW`
+  pauses every running campaign and alerts `CAMPAIGN_ALERT_PHONE`; `RED` stops
+  every running campaign immediately and alerts.
+- **Global daily cap** (`CAMPAIGN_DAILY_CAP`, default 1000) — checked per
+  tick across all campaigns combined, not per-campaign.
+- **Cooldown** (`CAMPAIGN_DEFAULT_COOLDOWN_DAYS`, default 7) — a global
+  per-phone key set on every successful campaign send; checked before every
+  future campaign send, regardless of which campaign originally set it.
+- **Suppression (opt-out)** — see below; checked before every send, forever.
+- **Test-send gate** — enforced server-side (not just in the UI): any
+  campaign over `CAMPAIGN_TEST_SEND_REQUIRED_OVER` recipients (default 100)
+  can only launch via test-send → explicit approve; the direct-launch
+  endpoint refuses oversized campaigns outright.
+- **Rate-limit circuit breaker** — Meta error code 131056 (per-recipient
+  spam-rate throttle) or a generic 429 stops sending for the *rest of that
+  tick* immediately, rather than continuing to hammer into the same wall.
+
+**Opt-out (mandatory, `lib/optout.js`).** Detected on every inbound message,
+regardless of conversation state — English/Hindi/Hinglish, deliberately
+tuned to avoid false negatives at the cost of occasional false positives
+(a missed opt-out is the actually dangerous failure mode; a wrongly-detected
+one just needs a manual removal from the dashboard's suppression list).
+Adds to a permanent Redis suppression set, confirms to the customer in their
+language, and does **not** disable the support bot — only future campaign
+sends are suppressed.
+
+**Variable mapping.** Each `{{n}}` in a template body maps to either static
+text, the lead's name/phone, or a named CSV/Zoho column — resolved per
+recipient at send time from a snapshot taken when the campaign was created
+(so a later CSV re-import can't retroactively change an in-flight send).
+Image headers are uploaded once (`POST /{phone_number_id}/media`) and the
+resulting `media_id` is reused across the entire send.
+
+**Zoho CRM live sync setup.** Optional — CSV import (including a native
+Zoho export, zero setup) is fully sufficient without it. To enable the
+dashboard's "Sync from Zoho" button:
+1. Go to **api-console.zoho.com** → **Add Client** → **Self Client**.
+2. Under **Generate Code**, enter scope `ZohoCRM.modules.leads.READ` and a
+   short validity window (e.g. 10 minutes), then generate.
+3. Immediately exchange that code for a refresh token (it's shown once):
+   ```bash
+   curl -X POST https://accounts.zoho.in/oauth/v2/token \
+     -d "grant_type=authorization_code" \
+     -d "client_id=YOUR_CLIENT_ID" \
+     -d "client_secret=YOUR_CLIENT_SECRET" \
+     -d "code=THE_GENERATED_CODE"
+   ```
+4. Set `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, and `ZOHO_REFRESH_TOKEN`
+   (from the response's `refresh_token`) in Vercel, then redeploy.
+5. If your Zoho org isn't on the India (`.in`) data center, also set
+   `ZOHO_ACCOUNTS_BASE` / `ZOHO_API_BASE` to match (`.com`, `.eu`, etc).
+
+The refresh token never expires on its own (Zoho self-clients are long-lived
+by design) — `lib/zoho-token.js` mints and caches short-lived access tokens
+from it automatically, mirroring how `lib/shopify-token.js` already handles
+Shopify's OAuth.
+
+**Analytics.** Sent/failed are counted at send time; delivered/read come from
+WhatsApp status webhooks (idempotency-guarded — Meta can redeliver the same
+status callback, so each transition is only counted once per recipient, via
+`deliveredAt`/`readAt` markers). Replied and opted-out are counted the first
+time that customer messages back, which also tags their CRM conversation
+with the sourcing campaign (`conv:meta:<phone>.campaignSource`) so replies
+show up as normal conversations in `/dashboard`, not a separate inbox.
+Failure reasons are grouped on demand (campaign detail drill-down, not part
+of continuous polling) since scanning every recipient is only cheap when
+it's user-initiated rather than constant.
+
 ---
 
 ## 6. Testing checklist
@@ -495,6 +639,27 @@ it; Shopify webhooks return `401` on bad HMAC and `200` otherwise.
    dashboard → confirm it arrives on WhatsApp → flip **Bot ON** → confirm the
    bot resumes replying. Try the search box and each filter chip.
 9. **Logs:** inspect `log:events` in Upstash for a full audit trail.
+10. **Opt-out:** message the bot "STOP" from a test number → confirm a polite
+    confirmation reply and a `suppression:optout` entry in Redis (and in
+    `/campaigns` → Suppression tab). Confirm the bot still answers a NORMAL
+    follow-up message afterward (opt-out suppresses campaigns, not support).
+11. **Campaign, small (≤ threshold):** `/campaigns` → Leads → import a tiny
+    CSV (a couple of your own test numbers) → New Campaign → pick a template
+    → map variables → preview audience → **Launch now** → watch the
+    Campaigns tab counters move → confirm the message arrives on WhatsApp →
+    confirm a reply from that number shows up in `/dashboard` tagged with
+    the campaign.
+12. **Campaign, gated (> threshold):** create a campaign over
+    `CAMPAIGN_TEST_SEND_REQUIRED_OVER` recipients → confirm **Launch now**
+    is unavailable and only **Send test message** appears → confirm the test
+    arrives at `CAMPAIGN_ALERT_PHONE` → **Approve & launch** → confirm it
+    starts running only after that.
+13. **Kill switch:** while a campaign is running, hit the kill switch →
+    confirm sending stops within one tick → turn it off → confirm the
+    campaign resumes on its own without touching the campaign itself.
+14. **Resumability:** pause a running campaign, note the sent count, resume
+    it → confirm no recipient already marked `sent` gets a duplicate message
+    (check a few `campaign:<id>:recipient:<phone>` hashes in Redis).
 
 ---
 

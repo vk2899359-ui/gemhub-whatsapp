@@ -7,6 +7,7 @@ import { CONFIG, secrets } from '../lib/env.js';
 import { readRawBody } from '../lib/http.js';
 import { handleInboundMessage } from '../lib/handlers/inbound.js';
 import { logSystem } from '../lib/log.js';
+import { resolveCampaignMessage, getRecipientStatus, setRecipientStatus, incrementCounter } from '../lib/campaigns.js';
 
 // Ask Vercel not to pre-parse the body so we can verify signatures.
 export const config = { api: { bodyParser: false } };
@@ -72,7 +73,8 @@ async function processPayload(body) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
 
-      // Delivery/read status callbacks — log and skip.
+      // Delivery/read status callbacks — log, and feed campaign analytics
+      // when the message id maps back to a campaign send.
       if (value.statuses?.length) {
         for (const s of value.statuses) {
           await logSystem({
@@ -81,6 +83,11 @@ async function processPayload(body) {
             messageId: s.id,
             recipient: s.recipient_id,
           });
+          try {
+            await applyCampaignStatus(s);
+          } catch (err) {
+            await logSystem({ event: 'campaign_status_apply_error', messageId: s.id, error: err.message });
+          }
         }
       }
 
@@ -97,6 +104,30 @@ async function processPayload(body) {
         }
       }
     }
+  }
+}
+
+// Idempotency guard per status transition — Meta can (and does) redeliver
+// the same status callback, so only count a transition once per recipient.
+async function applyCampaignStatus(s) {
+  const mapping = await resolveCampaignMessage(s.id);
+  if (!mapping) return; // not a campaign-sourced message
+  const { campaignId, phone } = mapping;
+  const recipient = await getRecipientStatus(campaignId, phone);
+  if (!recipient) return;
+
+  if (s.status === 'delivered' && !recipient.deliveredAt) {
+    await setRecipientStatus(campaignId, phone, { deliveredAt: Date.now() });
+    await incrementCounter(campaignId, 'delivered');
+  } else if (s.status === 'read' && !recipient.readAt) {
+    await setRecipientStatus(campaignId, phone, { readAt: Date.now() });
+    await incrementCounter(campaignId, 'read');
+  } else if (s.status === 'failed' && recipient.status !== 'failed') {
+    // Delivery-time failure (e.g. undeliverable) distinct from a send-time
+    // API rejection, which is already counted where the send itself throws.
+    const reason = s.errors?.[0]?.title || s.errors?.[0]?.message || 'Delivery failed';
+    await setRecipientStatus(campaignId, phone, { status: 'failed', lastError: reason });
+    await incrementCounter(campaignId, 'failed');
   }
 }
 

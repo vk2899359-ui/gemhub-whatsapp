@@ -19,6 +19,16 @@ import {
 import { sendTemplate } from '../../lib/whatsapp.js';
 import { abandonedCart1, abandonedCart2 } from '../../lib/templates.js';
 import { logSystem } from '../../lib/log.js';
+import { listRunningCampaignIds, getCampaign } from '../../lib/campaigns.js';
+import { processTick } from '../../lib/campaign-sender.js';
+
+// Campaign self-chaining is the primary driver (see lib/campaign-sender.js),
+// but on Hobby this daily cron is the only guaranteed backstop if a chain
+// link ever fails to fire — this sweep re-kicks anything that's gone quiet.
+// Worst case with this alone: up to a 24h stall. The dashboard also nudges
+// while a campaign is open, and there's a manual "Resume" action — this is
+// the last-resort net, not the primary mechanism.
+const STALL_THRESHOLD_MS = 15 * 60 * 1000;
 
 const SECOND_NUDGE_AT_MS = 24 * 60 * 60 * 1000; // 24h after checkout creation
 
@@ -109,7 +119,37 @@ export default async function handler(req, res) {
   }
 
   await logSystem({ event: 'cron_run', ...summary });
-  return res.status(200).json({ ok: true, ...summary });
+
+  const watchdog = await sweepStalledCampaigns();
+
+  return res.status(200).json({ ok: true, ...summary, watchdog });
+}
+
+async function sweepStalledCampaigns() {
+  const result = { checked: 0, kicked: 0 };
+  let runningIds = [];
+  try {
+    runningIds = await listRunningCampaignIds();
+  } catch (err) {
+    await logSystem({ event: 'campaign_watchdog_error', error: err.message });
+    return result;
+  }
+
+  let stalled = false;
+  for (const id of runningIds) {
+    result.checked++;
+    const campaign = await getCampaign(id);
+    if (!campaign) continue;
+    const lastActivity = campaign.lastTickAt || campaign.startedAt || campaign.createdAt;
+    if (Date.now() - lastActivity > STALL_THRESHOLD_MS) stalled = true;
+  }
+
+  if (stalled) {
+    result.kicked = 1;
+    await logSystem({ event: 'campaign_watchdog_kick', runningIds });
+    await processTick({ trigger: 'watchdog' });
+  }
+  return result;
 }
 
 // Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` when CRON_SECRET is

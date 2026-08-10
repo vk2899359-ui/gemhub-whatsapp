@@ -194,6 +194,7 @@ input:checked + .slider:before{transform:translateX(16px);}
   <div id="sidebar">
     <div id="sidebarHeader">
       <h1>GemHub CRM</h1>
+      <a href="/campaigns" style="color:#fff;opacity:.85;font-size:12.5px;margin-right:12px;text-decoration:none;">Campaigns &#8594;</a>
       <button id="logoutBtn">Log out</button>
     </div>
     <div id="searchWrap"><input id="searchInput" placeholder="Search name, number or message..."></div>
