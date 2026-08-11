@@ -203,6 +203,7 @@ input:checked + .slider:before{transform:translateX(16px);}
       <button class="chip" data-filter="unread">Unread</button>
       <button class="chip" data-filter="handed_over">Handed over</button>
       <button class="chip" data-filter="ad_sourced">Ad-sourced</button>
+      <button class="chip" data-filter="campaign_sourced">Campaign</button>
       <button class="chip" data-filter="has_order">Has order</button>
     </div>
     <div id="convList"></div>
@@ -244,7 +245,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     greeted: 'Greeted', qualified: 'Qualified', shown_products: 'Shown products',
     booked: 'Booked visit', purchased: 'Purchased'
   };
-  var FILTERS = ['', 'unread', 'handed_over', 'ad_sourced', 'has_order'];
+  var FILTERS = ['', 'unread', 'handed_over', 'ad_sourced', 'campaign_sourced', 'has_order'];
 
   var state = {
     conversations: [],
@@ -447,6 +448,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     if (t.leadBudget) chips += '<span class="infoChip">Budget: ' + escapeHtml(t.leadBudget) + '</span>';
     if (t.hasObjection) chips += '<span class="infoChip objection">Objection raised</span>';
     if (t.adSourced) chips += '<span class="infoChip">Ad-sourced</span>';
+    if (t.campaignSource) chips += '<span class="infoChip" title="' + escapeHtml(t.campaignOffer || '') + '">Campaign reply</span>';
     if (t.hasOrder) chips += '<span class="infoChip">Has order</span>';
     el.infoBar.innerHTML = chips;
 
