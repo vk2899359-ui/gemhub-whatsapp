@@ -125,7 +125,7 @@ td{padding:9px 10px; border-bottom:1px solid var(--wa-border); vertical-align:to
         <select id="templateSelect"><option value="">Loading templates...</option></select>
         <div class="hint" id="templateMeta"></div>
         <div id="imageUploadWrap" class="hidden">
-          <label>Header image (uploaded once, reused for every recipient)</label>
+          <label id="imageUploadLabel">Header media (uploaded once, reused for every recipient)</label>
           <input type="file" id="imageFile" accept="image/*">
           <div class="hint" id="imageStatus"></div>
         </div>
@@ -239,7 +239,7 @@ td{padding:9px 10px; border-bottom:1px solid var(--wa-border); vertical-align:to
   var state = { templates: [], selectedTemplate: null, mediaId: null, campaignId: null, requiresTestSend: false, leadsMeta: null };
   var el = {};
   ['pwInput','loginBtn','loginError','loginScreen','app','killBtn','logoutLink',
-   'campName','templateSelect','templateMeta','imageUploadWrap','imageFile','imageStatus',
+   'campName','templateSelect','templateMeta','imageUploadWrap','imageUploadLabel','imageFile','imageStatus',
    'mappingCard','varRows','preview','audienceCard','filterSource','filterTag','filterList','filterDays',
    'previewAudienceBtn','audienceResult','scheduleCard','throttle','cooldown','scheduleMode','scheduleAt',
    'launchCard','launchSummary','createBtn','postCreateActions','testGate','testSendBtn','approveBtn',
@@ -327,7 +327,12 @@ td{padding:9px 10px; border-bottom:1px solid var(--wa-border); vertical-align:to
     state.mediaId = null;
     if (!t) { el.mappingCard.style.display = 'none'; el.audienceCard.style.display = 'none'; el.scheduleCard.style.display = 'none'; el.launchCard.style.display = 'none'; return; }
     el.templateMeta.textContent = 'Header: ' + (t.headerFormat || 'none') + ' \\u00b7 Body variables: ' + t.bodyVarCount + (t.buttons.length ? ' \\u00b7 Buttons: ' + t.buttons.map(function(b){return b.type;}).join(',') : '');
-    el.imageUploadWrap.classList.toggle('hidden', t.headerFormat !== 'IMAGE');
+    var needsMedia = t.headerFormat === 'IMAGE' || t.headerFormat === 'VIDEO';
+    el.imageUploadWrap.classList.toggle('hidden', !needsMedia);
+    if (needsMedia) {
+      el.imageFile.setAttribute('accept', t.headerFormat === 'VIDEO' ? 'video/*' : 'image/*');
+      el.imageUploadLabel.textContent = (t.headerFormat === 'VIDEO' ? 'Header video' : 'Header image') + ' (uploaded once, reused for every recipient)';
+    }
     renderVarRows(t);
     el.mappingCard.style.display = 'block';
     el.audienceCard.style.display = 'block';

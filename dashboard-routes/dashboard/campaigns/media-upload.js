@@ -5,7 +5,8 @@
 import { requireAuth } from '../../../lib/dashboardAuth.js';
 import { uploadMedia } from '../../../lib/meta.js';
 
-const MAX_BYTES = 5 * 1024 * 1024; // Meta's own image-header limit is 5MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // Meta's own image-header limit is 5MB
+const MAX_VIDEO_BYTES = 16 * 1024 * 1024; // Meta's own video-header limit is 16MB
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -18,8 +19,10 @@ export default async function handler(req, res) {
   if (!dataBase64 || !mimeType) {
     return res.status(400).json({ error: 'Missing dataBase64 or mimeType' });
   }
-  if (!/^image\//.test(mimeType)) {
-    return res.status(400).json({ error: 'Only image uploads are supported for template headers' });
+  const isImage = /^image\//.test(mimeType);
+  const isVideo = /^video\//.test(mimeType);
+  if (!isImage && !isVideo) {
+    return res.status(400).json({ error: 'Only image or video uploads are supported for template headers' });
   }
 
   let buffer;
@@ -28,8 +31,9 @@ export default async function handler(req, res) {
   } catch {
     return res.status(400).json({ error: 'Invalid base64 payload' });
   }
-  if (buffer.length > MAX_BYTES) {
-    return res.status(400).json({ error: 'Image too large — max 5MB' });
+  const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+  if (buffer.length > maxBytes) {
+    return res.status(400).json({ error: `${isVideo ? 'Video' : 'Image'} too large — max ${maxBytes / (1024 * 1024)}MB` });
   }
 
   try {
