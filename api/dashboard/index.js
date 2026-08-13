@@ -154,6 +154,9 @@ input:checked + .slider:before{transform:translateX(16px);}
 .bubble.in{background:var(--wa-in);}
 .bubble.system{background:var(--wa-chip); color:var(--wa-sub); font-size:12.5px; max-width:80%; text-align:center; border-radius:8px;}
 .bubble img{max-width:100%; border-radius:6px; display:block; margin-bottom:4px;}
+.bubble img.stickerImg{max-width:120px;}
+.bubble video{max-width:100%; border-radius:6px; display:block; margin-bottom:4px;}
+.bubble audio{max-width:100%; display:block; margin-bottom:4px;}
 .bubble .msgTime{font-size:10.5px; color:var(--wa-sub); text-align:right; margin-top:3px;}
 .bubble .tag{font-size:10px; opacity:.7; margin-bottom:2px; font-weight:600;}
 .chips-inline{display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;}
@@ -465,20 +468,24 @@ input:checked + .slider:before{transform:translateX(16px);}
         inner = linkify(escapeHtml(m.body));
         break;
       case 'image':
-        inner = (m.mediaUrl ? '<img src="' + m.mediaUrl + '">' : '<div class="tag">Photo received</div>') +
+        var imgSrc = m.mediaUrl || (m.mediaId ? '/api/dashboard/media?id=' + m.mediaId : '');
+        inner = (imgSrc ? '<a href="' + imgSrc + '" target="_blank"><img src="' + imgSrc + '"></a>' : '<div class="tag">Photo received</div>') +
                 (m.caption ? escapeHtml(m.caption) : '');
         break;
       case 'video':
-        inner = '<div class="tag">Video</div>' + escapeHtml(m.caption || '');
+        inner = (m.mediaId ? '<video controls src="/api/dashboard/media?id=' + m.mediaId + '"></video>' : '<div class="tag">Video</div>') +
+                escapeHtml(m.caption || '');
         break;
       case 'audio':
-        inner = '<div class="tag">Voice message</div>';
+        inner = m.mediaId ? '<audio controls src="/api/dashboard/media?id=' + m.mediaId + '"></audio>' : '<div class="tag">Voice message</div>';
         break;
       case 'document':
-        inner = '<div class="tag">Document</div>' + escapeHtml(m.filename || m.caption || '');
+        inner = m.mediaId
+          ? '<a class="tag" href="/api/dashboard/media?id=' + m.mediaId + '" target="_blank">Document ↓</a> ' + escapeHtml(m.filename || m.caption || '')
+          : '<div class="tag">Document</div>' + escapeHtml(m.filename || m.caption || '');
         break;
       case 'sticker':
-        inner = '<div class="tag">Sticker</div>';
+        inner = m.mediaId ? '<img class="stickerImg" src="/api/dashboard/media?id=' + m.mediaId + '">' : '<div class="tag">Sticker</div>';
         break;
       case 'location':
         var loc = m.location || {};

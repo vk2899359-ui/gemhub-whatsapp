@@ -20,6 +20,7 @@ import loginHandler from '../../dashboard-routes/dashboard/login.js';
 import logoutHandler from '../../dashboard-routes/dashboard/logout.js';
 import conversationsHandler from '../../dashboard-routes/dashboard/conversations.js';
 import threadHandler from '../../dashboard-routes/dashboard/thread.js';
+import mediaHandler from '../../dashboard-routes/dashboard/media.js';
 import sendHandler from '../../dashboard-routes/dashboard/send.js';
 import botHandler from '../../dashboard-routes/dashboard/bot.js';
 import leadsMetaHandler from '../../dashboard-routes/dashboard/leads/meta.js';
@@ -48,6 +49,7 @@ const ROUTES = {
   logout: logoutHandler,
   conversations: conversationsHandler,
   thread: threadHandler,
+  media: mediaHandler,
   send: sendHandler,
   bot: botHandler,
   'leads/meta': leadsMetaHandler,
