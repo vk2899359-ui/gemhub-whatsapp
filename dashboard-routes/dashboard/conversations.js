@@ -10,7 +10,7 @@ export default async function handler(req, res) {
 
   const q = (req.query.q || '').toString();
   const filter = (req.query.filter || '').toString() || undefined;
-  const limit = Math.min(Number(req.query.limit) || 100, 300);
+  const limit = Math.min(Number(req.query.limit) || 100, 1000);
 
   try {
     const conversations =

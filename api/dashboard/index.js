@@ -258,7 +258,9 @@ input:checked + .slider:before{transform:translateX(16px);}
     query: '',
     listTimer: null,
     threadTimer: null,
-    windowTickTimer: null
+    windowTickTimer: null,
+    listLimit: 100,
+    loadingMoreList: false
   };
 
   var el = {};
@@ -350,16 +352,27 @@ input:checked + .slider:before{transform:translateX(16px);}
 
   // ---- conversation list ----
   function loadConversations() {
-    var params = [];
+    var params = ['limit=' + state.listLimit];
     if (state.query) params.push('q=' + encodeURIComponent(state.query));
     if (state.filter) params.push('filter=' + encodeURIComponent(state.filter));
-    var qs = params.length ? '?' + params.join('&') : '';
+    var qs = '?' + params.join('&');
     api('/api/dashboard/conversations' + qs).then(function (r) {
+      state.loadingMoreList = false;
       if (r.status === 401) return showLogin();
       if (!r.ok) return;
       state.conversations = r.json.conversations || [];
       renderList();
     });
+  }
+
+  // Re-fetches from the top with a bigger limit each time (simple, matches
+  // how the 8s poll already re-fetches everything — fine at this business's
+  // conversation volume). Triggered when the list is scrolled near its end.
+  function loadMoreConversations() {
+    if (state.loadingMoreList || state.conversations.length < state.listLimit) return;
+    state.loadingMoreList = true;
+    state.listLimit += 100;
+    loadConversations();
   }
 
   function renderList() {
@@ -400,6 +413,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     var btn = e.target.closest('.chip');
     if (!btn) return;
     state.filter = btn.getAttribute('data-filter') || '';
+    state.listLimit = 100;
     Array.prototype.forEach.call(el.filterRow.querySelectorAll('.chip'), function (c) { c.classList.remove('active'); });
     btn.classList.add('active');
     loadConversations();
@@ -409,7 +423,12 @@ input:checked + .slider:before{transform:translateX(16px);}
   el.searchInput.addEventListener('input', function () {
     clearTimeout(searchDebounce);
     var val = el.searchInput.value;
-    searchDebounce = setTimeout(function () { state.query = val; loadConversations(); }, 350);
+    searchDebounce = setTimeout(function () { state.query = val; state.listLimit = 100; loadConversations(); }, 350);
+  });
+
+  el.convList.addEventListener('scroll', function () {
+    var nearBottom = el.convList.scrollTop + el.convList.clientHeight >= el.convList.scrollHeight - 200;
+    if (nearBottom) loadMoreConversations();
   });
 
   // ---- thread ----
