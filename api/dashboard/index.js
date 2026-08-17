@@ -385,7 +385,12 @@ input:checked + .slider:before{transform:translateX(16px);}
           '</div>' +
         '</div>';
     }).join('');
+    // The list is fully replaced on every 8s poll — save/restore scrollTop
+    // across it, otherwise the browser resets scroll to 0 on innerHTML
+    // replacement and scrolling down never sticks.
+    var prevScrollTop = el.convList.scrollTop;
     el.convList.innerHTML = html;
+    el.convList.scrollTop = prevScrollTop;
     Array.prototype.forEach.call(el.convList.querySelectorAll('.convItem'), function (node) {
       node.addEventListener('click', function () { selectConversation(node.getAttribute('data-phone')); });
     });
