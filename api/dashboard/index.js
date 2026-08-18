@@ -141,6 +141,18 @@ input:checked + .slider:before{transform:translateX(16px);}
 .infoChip{font-size:11.5px; padding:3px 9px; border-radius:12px; background:var(--wa-chip); color:var(--wa-sub);}
 .infoChip.stage{background:var(--wa-accent); color:#fff;}
 .infoChip.objection{background:#f5c04a; color:#4d3800;}
+#callTagBar{display:flex; gap:6px; padding:8px 16px 0; flex-wrap:wrap; background:var(--wa-panel);}
+.callTagBtn{
+  font-size:12px; padding:4px 11px; border-radius:14px; border:1px solid var(--wa-border);
+  background:transparent; color:var(--wa-sub); cursor:pointer; font-weight:500;
+}
+.callTagBtn.active[data-tag="not_answering"]{background:#f5c04a; color:#4d3800; border-color:#f5c04a;}
+.callTagBtn.active[data-tag="not_interested"]{background:var(--wa-danger); color:#fff; border-color:var(--wa-danger);}
+.callTagBtn.active[data-tag="interested"]{background:var(--wa-green); color:#fff; border-color:var(--wa-green);}
+.badge.callTag{color:#fff;}
+.badge.callTag[data-tag="not_answering"]{background:#f5c04a; color:#4d3800;}
+.badge.callTag[data-tag="not_interested"]{background:var(--wa-danger);}
+.badge.callTag[data-tag="interested"]{background:var(--wa-green);}
 #messages{flex:1; overflow-y:auto; padding:16px 6%; background:var(--wa-chat-bg); display:flex; flex-direction:column; gap:3px;}
 .bubbleRow{display:flex;}
 .bubbleRow.out{justify-content:flex-end;}
@@ -229,6 +241,7 @@ input:checked + .slider:before{transform:translateX(16px);}
           </label>
         </div>
       </div>
+      <div id="callTagBar"></div>
       <div id="infoBar"></div>
       <div id="messages"></div>
       <div id="replyError" class="hidden"></div>
@@ -243,6 +256,13 @@ input:checked + .slider:before{transform:translateX(16px);}
 <script>
 (function () {
   'use strict';
+
+  var CALL_TAG_OPTIONS = [
+    { value: 'not_answering', label: 'Not Answering' },
+    { value: 'not_interested', label: 'Not Interested' },
+    { value: 'interested', label: 'Interested' }
+  ];
+  var CALL_TAG_LABELS = { not_answering: 'Not Answering', not_interested: 'Not Interested', interested: 'Interested' };
 
   var STAGE_LABELS = {
     greeted: 'Greeted', qualified: 'Qualified', shown_products: 'Shown products',
@@ -266,7 +286,7 @@ input:checked + .slider:before{transform:translateX(16px);}
   var el = {};
   ['loginScreen','loginBox','pwInput','loginBtn','loginError','app','sidebar','convList',
    'searchInput','filterRow','main','emptyState','threadView','threadName','threadSub',
-   'botToggle','botLabel','infoBar','messages','replyInput','sendBtn','replyError',
+   'botToggle','botLabel','callTagBar','infoBar','messages','replyInput','sendBtn','replyError',
    'backBtn','logoutBtn'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   // ---- fetch helpers ----
@@ -386,6 +406,7 @@ input:checked + .slider:before{transform:translateX(16px);}
       if (!c.botOn) badges += '<span class="badge off">Handed over</span>';
       if (c.adSourced) badges += '<span class="badge">Ad</span>';
       if (c.hasOrder) badges += '<span class="badge">Order</span>';
+      if (c.callTag) badges += '<span class="badge callTag" data-tag="' + c.callTag + '">' + (CALL_TAG_LABELS[c.callTag] || c.callTag) + '</span>';
       var unread = c.unreadCount > 0 ? '<span class="unreadDot">' + (c.unreadCount > 99 ? '99+' : c.unreadCount) + '</span>' : '';
       return '' +
         '<div class="convItem' + (c.phone === state.selectedPhone ? ' selected' : '') + '" data-phone="' + c.phone + '">' +
@@ -470,6 +491,11 @@ input:checked + .slider:before{transform:translateX(16px);}
     el.botToggle.checked = t.botOn;
     el.botLabel.textContent = t.botOn ? 'Bot ON' : 'Bot OFF';
 
+    el.callTagBar.innerHTML = CALL_TAG_OPTIONS.map(function (opt) {
+      var active = t.callTag === opt.value ? ' active' : '';
+      return '<button class="callTagBtn' + active + '" data-tag="' + opt.value + '">' + opt.label + '</button>';
+    }).join('');
+
     var chips = '<span class="infoChip stage">' + (STAGE_LABELS[t.stage] || t.stage) + '</span>';
     if (t.leadOccasion) chips += '<span class="infoChip">Occasion: ' + escapeHtml(t.leadOccasion) + '</span>';
     if (t.leadBudget) chips += '<span class="infoChip">Budget: ' + escapeHtml(t.leadBudget) + '</span>';
@@ -553,6 +579,21 @@ input:checked + .slider:before{transform:translateX(16px);}
     api('/api/dashboard/bot', { method: 'POST', body: { phone: state.selectedPhone, on: on } }).then(function (r) {
       if (!r.ok) { el.botToggle.checked = !on; el.botLabel.textContent = !on ? 'Bot ON' : 'Bot OFF'; }
       else loadThread(false);
+    });
+  });
+
+  el.callTagBar.addEventListener('click', function (e) {
+    var btn = e.target.closest('.callTagBtn');
+    if (!btn || !state.thread) return;
+    var tag = btn.getAttribute('data-tag');
+    var next = state.thread.callTag === tag ? null : tag; // click active tag again to clear it
+    api('/api/dashboard/call-tag', { method: 'POST', body: { phone: state.selectedPhone, tag: next } }).then(function (r) {
+      if (r.ok) {
+        state.thread.callTag = next;
+        renderThread(false);
+        var item = state.conversations.filter(function (c) { return c.phone === state.selectedPhone; })[0];
+        if (item) { item.callTag = next; renderList(); }
+      }
     });
   });
 
