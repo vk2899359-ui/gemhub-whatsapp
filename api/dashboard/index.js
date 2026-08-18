@@ -153,6 +153,14 @@ input:checked + .slider:before{transform:translateX(16px);}
 .badge.callTag[data-tag="not_answering"]{background:#f5c04a; color:#4d3800;}
 .badge.callTag[data-tag="not_interested"]{background:var(--wa-danger);}
 .badge.callTag[data-tag="interested"]{background:var(--wa-green);}
+#calledByBar{display:flex; align-items:center; gap:6px; padding:6px 16px 0; flex-wrap:wrap; background:var(--wa-panel);}
+#calledByBar .label{font-size:11.5px; color:var(--wa-sub);}
+.calledByBtn{
+  font-size:12px; padding:4px 11px; border-radius:14px; border:1px solid var(--wa-border);
+  background:transparent; color:var(--wa-sub); cursor:pointer; font-weight:500;
+}
+.calledByBtn.active{background:var(--wa-accent); color:#fff; border-color:var(--wa-accent);}
+.badge.calledBy{background:var(--wa-chip); color:var(--wa-sub);}
 #messages{flex:1; overflow-y:auto; padding:16px 6%; background:var(--wa-chat-bg); display:flex; flex-direction:column; gap:3px;}
 .bubbleRow{display:flex;}
 .bubbleRow.out{justify-content:flex-end;}
@@ -242,6 +250,7 @@ input:checked + .slider:before{transform:translateX(16px);}
         </div>
       </div>
       <div id="callTagBar"></div>
+      <div id="calledByBar"></div>
       <div id="infoBar"></div>
       <div id="messages"></div>
       <div id="replyError" class="hidden"></div>
@@ -263,6 +272,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     { value: 'interested', label: 'Interested' }
   ];
   var CALL_TAG_LABELS = { not_answering: 'Not Answering', not_interested: 'Not Interested', interested: 'Interested' };
+  var CALLED_BY_OPTIONS = ['Keshav', 'Sonia', 'Reshma'];
 
   var STAGE_LABELS = {
     greeted: 'Greeted', qualified: 'Qualified', shown_products: 'Shown products',
@@ -286,7 +296,7 @@ input:checked + .slider:before{transform:translateX(16px);}
   var el = {};
   ['loginScreen','loginBox','pwInput','loginBtn','loginError','app','sidebar','convList',
    'searchInput','filterRow','main','emptyState','threadView','threadName','threadSub',
-   'botToggle','botLabel','callTagBar','infoBar','messages','replyInput','sendBtn','replyError',
+   'botToggle','botLabel','callTagBar','calledByBar','infoBar','messages','replyInput','sendBtn','replyError',
    'backBtn','logoutBtn'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   // ---- fetch helpers ----
@@ -407,6 +417,7 @@ input:checked + .slider:before{transform:translateX(16px);}
       if (c.adSourced) badges += '<span class="badge">Ad</span>';
       if (c.hasOrder) badges += '<span class="badge">Order</span>';
       if (c.callTag) badges += '<span class="badge callTag" data-tag="' + c.callTag + '">' + (CALL_TAG_LABELS[c.callTag] || c.callTag) + '</span>';
+      if (c.calledBy) badges += '<span class="badge calledBy">' + escapeHtml(c.calledBy) + '</span>';
       var unread = c.unreadCount > 0 ? '<span class="unreadDot">' + (c.unreadCount > 99 ? '99+' : c.unreadCount) + '</span>' : '';
       return '' +
         '<div class="convItem' + (c.phone === state.selectedPhone ? ' selected' : '') + '" data-phone="' + c.phone + '">' +
@@ -494,6 +505,11 @@ input:checked + .slider:before{transform:translateX(16px);}
     el.callTagBar.innerHTML = CALL_TAG_OPTIONS.map(function (opt) {
       var active = t.callTag === opt.value ? ' active' : '';
       return '<button class="callTagBtn' + active + '" data-tag="' + opt.value + '">' + opt.label + '</button>';
+    }).join('');
+
+    el.calledByBar.innerHTML = '<span class="label">Called by:</span>' + CALLED_BY_OPTIONS.map(function (nm) {
+      var active = t.calledBy === nm ? ' active' : '';
+      return '<button class="calledByBtn' + active + '" data-name="' + nm + '">' + nm + '</button>';
     }).join('');
 
     var chips = '<span class="infoChip stage">' + (STAGE_LABELS[t.stage] || t.stage) + '</span>';
@@ -593,6 +609,21 @@ input:checked + .slider:before{transform:translateX(16px);}
         renderThread(false);
         var item = state.conversations.filter(function (c) { return c.phone === state.selectedPhone; })[0];
         if (item) { item.callTag = next; renderList(); }
+      }
+    });
+  });
+
+  el.calledByBar.addEventListener('click', function (e) {
+    var btn = e.target.closest('.calledByBtn');
+    if (!btn || !state.thread) return;
+    var nm = btn.getAttribute('data-name');
+    var next = state.thread.calledBy === nm ? null : nm; // click active name again to clear it
+    api('/api/dashboard/called-by', { method: 'POST', body: { phone: state.selectedPhone, name: next } }).then(function (r) {
+      if (r.ok) {
+        state.thread.calledBy = next;
+        renderThread(false);
+        var item = state.conversations.filter(function (c) { return c.phone === state.selectedPhone; })[0];
+        if (item) { item.calledBy = next; renderList(); }
       }
     });
   });
