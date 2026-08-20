@@ -228,6 +228,9 @@ input:checked + .slider:before{transform:translateX(16px);}
       <button class="chip" data-filter="ad_sourced">Ad-sourced</button>
       <button class="chip" data-filter="campaign_sourced">Campaign</button>
       <button class="chip" data-filter="has_order">Has order</button>
+      <button class="chip" data-filter="call_interested" id="chipInterested">Interested</button>
+      <button class="chip" data-filter="call_not_interested" id="chipNotInterested">Not Interested</button>
+      <button class="chip" data-filter="call_not_answering" id="chipNotAnswering">Not Answering</button>
     </div>
     <div id="convList"></div>
   </div>
@@ -278,7 +281,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     greeted: 'Greeted', qualified: 'Qualified', shown_products: 'Shown products',
     booked: 'Booked visit', purchased: 'Purchased'
   };
-  var FILTERS = ['', 'unread', 'handed_over', 'ad_sourced', 'campaign_sourced', 'has_order'];
+  var FILTERS = ['', 'unread', 'handed_over', 'ad_sourced', 'campaign_sourced', 'has_order', 'call_interested', 'call_not_interested', 'call_not_answering'];
 
   var state = {
     conversations: [],
@@ -289,6 +292,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     listTimer: null,
     threadTimer: null,
     windowTickTimer: null,
+    countsTimer: null,
     listLimit: 100,
     loadingMoreList: false
   };
@@ -297,7 +301,7 @@ input:checked + .slider:before{transform:translateX(16px);}
   ['loginScreen','loginBox','pwInput','loginBtn','loginError','app','sidebar','convList',
    'searchInput','filterRow','main','emptyState','threadView','threadName','threadSub',
    'botToggle','botLabel','callTagBar','calledByBar','infoBar','messages','replyInput','sendBtn','replyError',
-   'backBtn','logoutBtn'].forEach(function (id) { el[id] = document.getElementById(id); });
+   'backBtn','logoutBtn','chipInterested','chipNotInterested','chipNotAnswering'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   // ---- fetch helpers ----
   function api(path, opts) {
@@ -609,6 +613,7 @@ input:checked + .slider:before{transform:translateX(16px);}
         renderThread(false);
         var item = state.conversations.filter(function (c) { return c.phone === state.selectedPhone; })[0];
         if (item) { item.callTag = next; renderList(); }
+        loadCallTagCounts();
       }
     });
   });
@@ -657,6 +662,17 @@ input:checked + .slider:before{transform:translateX(16px);}
     });
   }
 
+  // ---- call-tag chip counts ----
+  function loadCallTagCounts() {
+    api('/api/dashboard/call-tag-counts').then(function (r) {
+      if (!r.ok || !r.json.counts) return;
+      var c = r.json.counts;
+      el.chipInterested.textContent = 'Interested (' + c.interested + ')';
+      el.chipNotInterested.textContent = 'Not Interested (' + c.not_interested + ')';
+      el.chipNotAnswering.textContent = 'Not Answering (' + c.not_answering + ')';
+    });
+  }
+
   // ---- polling / visibility ----
   function startPolling() {
     clearInterval(state.listTimer);
@@ -664,16 +680,23 @@ input:checked + .slider:before{transform:translateX(16px);}
       if (document.hidden) return;
       loadConversations();
     }, 8000);
+    clearInterval(state.countsTimer);
+    state.countsTimer = setInterval(function () {
+      if (document.hidden) return;
+      loadCallTagCounts();
+    }, 15000);
   }
 
   function showLogin() {
     clearInterval(state.listTimer);
     clearInterval(state.threadTimer);
+    clearInterval(state.countsTimer);
     el.loginScreen.classList.remove('hidden');
   }
 
   function boot() {
     loadConversations();
+    loadCallTagCounts();
     startPolling();
   }
 

@@ -25,6 +25,7 @@ import sendHandler from '../../dashboard-routes/dashboard/send.js';
 import botHandler from '../../dashboard-routes/dashboard/bot.js';
 import callTagHandler from '../../dashboard-routes/dashboard/call-tag.js';
 import calledByHandler from '../../dashboard-routes/dashboard/called-by.js';
+import callTagCountsHandler from '../../dashboard-routes/dashboard/call-tag-counts.js';
 import leadsMetaHandler from '../../dashboard-routes/dashboard/leads/meta.js';
 import leadsUploadHandler from '../../dashboard-routes/dashboard/leads/upload.js';
 import zohoStartHandler from '../../dashboard-routes/dashboard/leads/zoho-start.js';
@@ -56,6 +57,7 @@ const ROUTES = {
   bot: botHandler,
   'call-tag': callTagHandler,
   'called-by': calledByHandler,
+  'call-tag-counts': callTagCountsHandler,
   'leads/meta': leadsMetaHandler,
   'leads/upload': leadsUploadHandler,
   'leads/zoho-start': zohoStartHandler,
