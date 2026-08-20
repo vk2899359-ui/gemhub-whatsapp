@@ -710,6 +710,7 @@ input:checked + .slider:before{transform:translateX(16px);}
       el.loginScreen.classList.add('hidden');
       state.conversations = (r.json && r.json.conversations) || [];
       renderList();
+      loadCallTagCounts();
       startPolling();
     }
   });
