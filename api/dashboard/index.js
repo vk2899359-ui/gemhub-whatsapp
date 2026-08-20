@@ -232,6 +232,8 @@ input:checked + .slider:before{transform:translateX(16px);}
       <button class="chip" data-filter="call_not_interested" id="chipNotInterested">Not Interested</button>
       <button class="chip" data-filter="call_not_answering" id="chipNotAnswering">Not Answering</button>
       <button class="chip" data-filter="call_untagged" id="chipUntagged">Not Called</button>
+      <button class="chip" data-filter="called_by_sonia" id="chipSoniaCalls">Sonia</button>
+      <button class="chip" data-filter="called_by_reshma" id="chipReshmaCalls">Reshma</button>
     </div>
     <div id="convList"></div>
   </div>
@@ -282,7 +284,7 @@ input:checked + .slider:before{transform:translateX(16px);}
     greeted: 'Greeted', qualified: 'Qualified', shown_products: 'Shown products',
     booked: 'Booked visit', purchased: 'Purchased'
   };
-  var FILTERS = ['', 'unread', 'handed_over', 'ad_sourced', 'campaign_sourced', 'has_order', 'call_interested', 'call_not_interested', 'call_not_answering', 'call_untagged'];
+  var FILTERS = ['', 'unread', 'handed_over', 'ad_sourced', 'campaign_sourced', 'has_order', 'call_interested', 'call_not_interested', 'call_not_answering', 'call_untagged', 'called_by_sonia', 'called_by_reshma'];
 
   var state = {
     conversations: [],
@@ -302,7 +304,7 @@ input:checked + .slider:before{transform:translateX(16px);}
   ['loginScreen','loginBox','pwInput','loginBtn','loginError','app','sidebar','convList',
    'searchInput','filterRow','main','emptyState','threadView','threadName','threadSub',
    'botToggle','botLabel','callTagBar','calledByBar','infoBar','messages','replyInput','sendBtn','replyError',
-   'backBtn','logoutBtn','chipInterested','chipNotInterested','chipNotAnswering','chipUntagged'].forEach(function (id) { el[id] = document.getElementById(id); });
+   'backBtn','logoutBtn','chipInterested','chipNotInterested','chipNotAnswering','chipUntagged','chipSoniaCalls','chipReshmaCalls'].forEach(function (id) { el[id] = document.getElementById(id); });
 
   // ---- fetch helpers ----
   function api(path, opts) {
@@ -630,6 +632,7 @@ input:checked + .slider:before{transform:translateX(16px);}
         renderThread(false);
         var item = state.conversations.filter(function (c) { return c.phone === state.selectedPhone; })[0];
         if (item) { item.calledBy = next; renderList(); }
+        loadCallTagCounts();
       }
     });
   });
@@ -672,6 +675,8 @@ input:checked + .slider:before{transform:translateX(16px);}
       el.chipNotInterested.textContent = 'Not Interested (' + c.not_interested + ')';
       el.chipNotAnswering.textContent = 'Not Answering (' + c.not_answering + ')';
       el.chipUntagged.textContent = 'Not Called (' + c.untagged + ')';
+      el.chipSoniaCalls.textContent = 'Sonia (' + c.sonia_calls + ' calls)';
+      el.chipReshmaCalls.textContent = 'Reshma (' + c.reshma_calls + ' calls)';
     });
   }
 
